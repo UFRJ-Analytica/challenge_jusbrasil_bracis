@@ -51,4 +51,29 @@ mantendo a invariante `trecho == texto[inicio:fim]`.
 python -m unittest -v
 ```
 
+`test_generalizacao.py` não consulta o golden set. Ele usa frases sintéticas e
+casos adversariais para verificar famílias distintas de citação, variações de
+caixa, espaços e quebras de linha, estabilidade dos offsets, múltiplas citações,
+metadados de cabeçalho e falsos positivos por prefixos alfanuméricos. O teste do
+golden continua separado como regressão da base aberta e é ignorado quando os
+dados oficiais não estão disponíveis no checkout.
+
+As regressões também cobrem ponto final antes de seção numerada, processos com
+siglas de UF inexistentes e referências em linhas isoladas no corpo do documento.
+A extração aceita a forma de uma UF com duas letras sem verificar sua existência:
+isso não atribui classe, fonte nem confiança à citação. Os testes sintéticos usados
+para ajustar o código são testes de desenvolvimento, não um conjunto de avaliação
+independente.
+
+O filtro de metadados considera a abertura do documento e campos de formulário
+adjacentes. Introduções terminadas em dois-pontos ou ponto ajudam a preservar
+precedentes transcritos, inclusive com campos de partes. Essa distinção é
+heurística: cabeçalhos sem campos e transcrições sem introdução clara podem
+continuar ambíguos. A tolerância a OCR em números processuais preserva números CNJ
+fragmentados e grupos de três ou mais caracteres numéricos após ponto e espaço;
+numerações de seção com aparência de continuação de número ainda podem ser ambíguas.
+
+Esta entrega avalia localização de trechos. A pontuação completa da competição
+também exige classificação e, quando aplicável, associação à fonte correta.
+
 O contrato oficial confirma offsets baseados em zero e `fim` exclusivo.

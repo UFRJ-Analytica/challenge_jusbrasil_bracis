@@ -35,27 +35,59 @@ _TRIBUNAL = r"""
     )
 """
 
-_UF = r"(?:AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)"
+# Reconhece a forma da sigla; sua existência é assunto da verificação posterior.
+_UF = r"[A-Z]{2}(?!\w)"
 
 _NUMERO_CNJ = r"""
     \d{1,7}\s*-\s*\d{2}\s*\.\s*\d{4}\s*\.\s*\d\s*\.\s*\d{2}\s*\.\s*\d{4}
 """
 
+# Impede que uma correspondência válida seja apenas o prefixo de um código
+# alfanumérico ou de outro número pontuado/barra (ex.: ``Tema 123abc``).
+_FIM_REFERENCIA = r"(?!\w|\s*/\s*\w|\.\d)"
+
 # Linhas de identificacao presentes nos documentos, nao referencias no corpo.
 _IDENTIFICACAO_PROCESSO = re.compile(
     rf"""
-    \s*(?:Refer[eê]ncia\s*:\s*)?(?:Processo|Autos)\s+
-    n[º°o.]\s*{_NUMERO_CNJ}\s*
+    \s*(?:Refer[eê]ncia\s*:\s*)?
+    (?:
+        (?:Processo|Autos)(?:\s+judicial)?
+            \s*(?:n(?:[.º°o]|[uú]mero)?\s*)? |
+        n(?:[.º°o]|[uú]mero)?\s+do\s+Processo\s*
+    )
+    :?\s*{_NUMERO_CNJ}\s*
     """,
     _FLAGS,
 )
 
+_CAMPO_CABECALHO = re.compile(
+    r"""^\s*(?:Autor|R[eé]u|Assistid[oa]|Interessad[oa]|Assunto|Elaborado\s+por|
+        Apelante|Apelad[oa]|Recorrente|Recorrid[oa]|Reclamante|Reclamad[oa]|
+        Representante|Representad[oa]|Agravante|Agravad[oa]|Impetrante|Paciente|
+        Autoridade\s+coatora|Requerente|Requerid[oa])\s*:\s*\S""",
+    _FLAGS,
+)
+_CAMPO_ROTULADO = re.compile(r"^\s*[^:\r\n]+:\s*\S")
+
 _DIGITO_OCR = r"[0-9OolISGg]"
 _TOKEN_NUMERO = rf"(?={_DIGITO_OCR}*\d){_DIGITO_OCR}+"
 
+# O formato CNJ permite espaços em todos os separadores. Fora dele, ponto
+# seguido de espaço só continua um grupo longo (milhares/OCR), para não
+# engolir o item curto de uma seção, como em ``REsp 123.\n2. Dos pedidos``.
 _NUMERO_PROCESSO = rf"""
-    \d{_DIGITO_OCR}*
-    (?:(?:(?:\s*[.\-/–—]\s*)+|\s+){_TOKEN_NUMERO})*
+    (?:
+        {_NUMERO_CNJ} |
+        \d{_DIGITO_OCR}*
+        (?:
+            (?:
+                (?:\s*\.(?: (?=\S) | \s+(?={_DIGITO_OCR}{{3,}}(?!\w)) ) |
+                   \s*[\-/–—]\s*)+ |
+                \s+
+            )
+            {_TOKEN_NUMERO}
+        )*
+    )
 """
 
 _CLASSE_BASE = r"""
@@ -67,6 +99,7 @@ _CLASSE_BASE = r"""
         Recurso\s+em\s+Mandado\s+de\s+Seguran[cç]a |
         Agravo\s+em\s+Recurso\s+Especial |
         Agravo\s+de\s+Instrumento |
+        Apela[cç][aã]o(?:\s+C[ií]vel|\s+Criminal)? |
         Suspens[aã]o\s+de\s+Liminar\s+e\s+de\s+Senten[cç]a |
         Recurso\s+Especial\s+Eleitoral |
         Recurso\s+Extraordin[aá]rio |
@@ -113,30 +146,42 @@ _PROCESSO_TST = rf"""
     (?:TST\s*-\s*)?
     {_CLASSE_TST}(?:\s*-\s*{_CLASSE_TST})*\s*-\s*
     {_NUMERO_PROCESSO}
+    {_FIM_REFERENCIA}
 """
 
-_FONTE_NORMATIVA = r"""
+_MARCADOR_NUMERO = r"(?:n(?:[.º°o]|[uú]mero)?\s*)?"
+_NUMERO_NORMA = rf"\d+(?:\.\d{{3}})*(?:\s*-\s*\d+)?(?:\s*/\s*\d{{2,4}})?"
+_ORGAO_NORMATIVO = r"(?:CNJ|CNMP|STF|STJ|TST|TSE|STM)"
+
+_FONTE_NORMATIVA = rf"""
     (?:
-        (?:CPC|CPP|CP|CC|CLT|CDC|CTN|CF|CRFB)(?:\s*/\s*\d{2,4})? |
+        (?:CPC|CPP|CP|CC|CLT|CDC|CTN|CF|CRFB)(?:\s*/\s*\d{{2,4}})? |
         Constitui[cç][aã]o(?:\s+da\s+Rep[uú]blica|\s+Fed.ral)?(?:\s+de\s+1988)? |
         Consolida[cç][aã]o\s+das\s+Leis\s+do\s+Trabalho |
         C[oó]digo\s+(?:Civil|Penal(?:\s+Militar)?|de\s+Processo\s+Civil|de\s+Processo\s+Penal|
                          Tribut[aá]rio\s+Nacional|Eleitoral|de\s+Defesa\s+do\s+Consumidor) |
-        Lei(?:\s+Complementar)?\s*(?:n(?:[.º°o]|[uú]mero)?\s*)?
-            \d+(?:\.\d{3})*(?:\s*/\s*\d{2,4})? |
-        Decreto(?:-Lei)?\s*(?:n(?:[.º°o]|[uú]mero)?\s*)?
-            \d+(?:\.\d{3})*(?:\s*/\s*\d{2,4})?
+        Lei(?:\s+Complementar)?\s*{_MARCADOR_NUMERO}{_NUMERO_NORMA} |
+        Decreto(?:-Lei)?\s*{_MARCADOR_NUMERO}{_NUMERO_NORMA} |
+        (?:
+            Emenda\s+Constitucional |
+            Medida\s+Provis[oó]ria |
+            Resolu[cç][aã]o(?:\s+{_ORGAO_NORMATIVO})?
+        )
+        \s*{_MARCADOR_NUMERO}{_NUMERO_NORMA}
+        (?:\s+do\s+{_ORGAO_NORMATIVO})?
     )
 """
 
+_NUMERO_ARTIGO = r"\d+(?:\.\d{3})*(?:[º°o])?(?:(?:\s*-\s*)?[A-Z])?"
+
 _ARTIGO = rf"""
     \b(?:arts?\.?|artigos?)\s*
-    \d+(?:\.\d{{3}})*[A-Z]?(?:[º°o])?
+    {_NUMERO_ARTIGO}
     (?:
         \s*(?:,|e|a)\s*
         (?:
-            §{{1,2}}\s*\d+[A-Z]?(?:[º°o])?(?:\s*-\s*[A-Z])? |
-            \d+[A-Z]?(?:[º°o])? |
+            §{{1,2}}\s*{_NUMERO_ARTIGO} |
+            {_NUMERO_ARTIGO} |
             (?:incisos?\s+)?[IVXLCDM]+(?![A-Z]) |
             al[ií]nea\s+["']?[a-z]["']? |
             ["'][a-z]["'] |
@@ -144,12 +189,13 @@ _ARTIGO = rf"""
         )
     )*
     (?:\s*,?\s*(?:do|da|dos|das)\s+{_FONTE_NORMATIVA})?
+    {_FIM_REFERENCIA}
 """
 
-_COMPLEMENTO_ARTIGO = r"""
+_COMPLEMENTO_ARTIGO = rf"""
     (?:
-        §{1,2}\s*\d+[A-Z]?(?:[º°o])? |
-        par[aá]grafo\s+\d+[A-Z]?(?:[º°o])? |
+        §{{1,2}}\s*{_NUMERO_ARTIGO} |
+        par[aá]grafo\s+{_NUMERO_ARTIGO} |
         inciso\s+[IVXLCDM]+ |
         al[ií]nea\s+["']?[a-z]["']?
     )
@@ -208,6 +254,7 @@ _PADROES: tuple[_Padrao, ...] = (
         {_NUMERO_PROCESSO}
         (?:\s*(?:[-/–—]\s*|\(\s*){_UF}\s*\)?)?
         (?:\s*,?\s*(?:do|da)\s+{_TRIBUNAL})?
+        {_FIM_REFERENCIA}
         """,
         110,
     ),
@@ -217,13 +264,14 @@ _PADROES: tuple[_Padrao, ...] = (
         \b(?:S[uú]mula|5[uú]mula|S[uú]m\.)(?:\s+Vinculante)?
         \s*(?:n(?:[.º°o]|[uú]mero)?\s*)?\d+(?:\.\d{{3}})*
         (?:\s*[-/]\s*{_TRIBUNAL}|\s+(?:do|da)\s+{_TRIBUNAL})?
+        {_FIM_REFERENCIA}
         """,
         110,
     ),
     _compilar(
         "dispositivo",
         rf"""
-        \b{_COMPLEMENTO_ARTIGO}\s+(?:do|da)\s+{_ARTIGO}
+        (?<!\w){_COMPLEMENTO_ARTIGO}\s+(?:do|da)\s+{_ARTIGO}
         """,
         105,
     ),
@@ -236,6 +284,7 @@ _PADROES: tuple[_Padrao, ...] = (
         \s*(?:n(?:[.º°o]|[uú]mero)?\s*)?\d+(?:\.\d{{3}})*
         (?:\s+da\s+repercuss[aã]o\s+geral)?
         (?:\s+(?:do|da)\s+{_TRIBUNAL})?
+        {_FIM_REFERENCIA}
         """,
         95,
     ),
@@ -247,11 +296,12 @@ _PADROES: tuple[_Padrao, ...] = (
             Decreto(?:-Lei)? |
             Emenda\s+Constitucional |
             Medida\s+Provis[oó]ria |
-            Resolu[cç][aã]o
+            Resolu[cç][aã]o(?:\s+{_ORGAO_NORMATIVO})?
         )
-        \s*(?:n(?:[.º°o]|[uú]mero)?\s*)?
-        \d+(?:\.\d{{3}})*(?:\s*/\s*\d{{2,4}})?
-        (?:\s*,?\s+de\s+\d{{1,2}}\s+de\s+[a-zç]+\s+de\s+\d{{4}})?
+        \s*{_MARCADOR_NUMERO}{_NUMERO_NORMA}
+        (?:\s+do\s+{_ORGAO_NORMATIVO})?
+        (?:\s*,?\s+de\s+\d{{1,2}}(?:[º°o])?\s+de\s+[a-zç]+\s+de\s+\d{{4}})?
+        {_FIM_REFERENCIA}
         """,
         90,
     ),
@@ -274,12 +324,40 @@ def _sobrepoe(a: _Candidato, b: _Candidato) -> bool:
 
 
 def _eh_identificacao_processo(texto: str, inicio: int, fim: int) -> bool:
-    """Reconhece uma linha inteira de metadados, sem corte por posicao."""
+    """Exige linha de identificação e contexto de abertura ou de formulário.
+
+    Uma linha ``Processo ...`` no corpo, sozinha, não prova ser metadado.
+    Campos de partes adjacentes são indícios de cabeçalho; relator isolado não.
+    """
     inicio_linha = texto.rfind("\n", 0, inicio) + 1
     fim_linha = texto.find("\n", fim)
     if fim_linha == -1:
         fim_linha = len(texto)
-    return _IDENTIFICACAO_PROCESSO.fullmatch(texto[inicio_linha:fim_linha]) is not None
+    if _IDENTIFICACAO_PROCESSO.fullmatch(texto[inicio_linha:fim_linha]) is None:
+        return False
+    if not texto[:inicio_linha].strip():
+        return True
+    anteriores = texto[:inicio_linha].splitlines()
+    seguintes = texto[fim_linha + 1:].splitlines()
+    ultima_linha = next(
+        (linha.strip() for linha in reversed(anteriores) if linha.strip()), ""
+    )
+    # Uma frase/introdução antes da referência é indício de citação no corpo,
+    # inclusive quando o precedente transcrito contém campos de partes.
+    if ultima_linha.endswith((":", ".")) and not _CAMPO_CABECALHO.match(ultima_linha):
+        return False
+    for vizinhas in (reversed(anteriores), iter(seguintes)):
+        campos = 0
+        for linha in vizinhas:
+            if not _CAMPO_ROTULADO.match(linha):
+                break
+            if _CAMPO_CABECALHO.match(linha):
+                return True
+            campos += 1
+        # Um bloco de formulário também pode ter rótulos danificados por OCR.
+        if campos >= 2:
+            return True
+    return False
 
 
 def _selecionar_sem_sobreposicao(candidatos: Iterable[_Candidato]) -> list[_Candidato]:

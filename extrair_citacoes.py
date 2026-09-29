@@ -442,6 +442,16 @@ def salvar_csv(linhas: Sequence[dict[str, object]], destino: str | Path) -> None
         escritor.writerows(linhas)
 
 
+def _diretorio_padrao() -> Path:
+    """Primeiro diretório de textos disponível neste checkout."""
+    raiz = Path(__file__).resolve().parent
+    for nome in ("desafio-jusbrasil-bracis-2026", "dados_competicao"):
+        candidato = raiz / nome / "txt"
+        if candidato.is_dir():
+            return candidato
+    return raiz / "desafio-jusbrasil-bracis-2026" / "txt"
+
+
 def _criar_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Extrai spans de citacoes juridicas dos documentos .txt."
@@ -449,8 +459,8 @@ def _criar_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--entrada",
         type=Path,
-        default=Path("dados_competicao") / "txt",
-        help="diretorio dos .txt (padrao: dados_competicao/txt)",
+        default=_diretorio_padrao(),
+        help="diretorio dos .txt (padrao: pacote de dados do repo)",
     )
     parser.add_argument(
         "--saida",

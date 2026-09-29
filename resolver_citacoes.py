@@ -8,7 +8,22 @@ import re
 import sqlite3
 import unicodedata
 from collections import defaultdict
+from difflib import SequenceMatcher
 from pathlib import Path
+
+
+# Caminhos do pacote de dados, na ordem em que são procurados quando nem
+# ``--db`` nem ``--entrada`` são informados.
+_DIRETORIOS_DADOS = ("desafio-jusbrasil-bracis-2026", "dados_competicao")
+
+
+def caminho_db_padrao() -> Path | None:
+    raiz = Path(__file__).resolve().parent
+    for nome in _DIRETORIOS_DADOS:
+        candidato = raiz / nome / "desafio1_bracis.db"
+        if candidato.is_file():
+            return candidato
+    return None
 
 
 UF_RE = re.compile(
@@ -21,6 +36,9 @@ OCR_MAP = str.maketrans({
     "S": "5", "s": "5",
     "G": "6", "g": "69",  # g pode representar 6 ou 9 no ruido OCR
 })
+
+# Teto de variantes geradas por expand_ocr (ver a função).
+_LIMITE_VARIANTES_OCR = 512
 
 LAW_SOURCE_MAP = {
     "cpc": ("law", "13105"),
@@ -42,8 +60,16 @@ LAW_SOURCE_MAP = {
     "crfb": ("cf", None),
     "constituicao federal": ("cf", None),
     "constituicao da republica": ("cf", None),
+    "constituicao da republica federativa do brasil": ("cf", None),
+    "constituicao de 1988": ("cf", None),
     "codigo eleitoral": ("law", "4737"),
 }
+
+# Nomes longos toleram erro de digitação/OCR por comparação de similaridade
+# (ex.: "Constituição Fedcral"). Siglas curtas ficam de fora: compará-las com
+# qualquer janela produziria vínculo errado, que é pior que não vincular.
+_FUZZY_MIN_CARACTERES = 12
+_FUZZY_LIMITE = 0.87
 
 CLASS_PATTERNS = [
     ("AGINT", r"\b(?:agint|agravo\s+interno)\b"),
@@ -75,8 +101,19 @@ def ascii_lower(text: str) -> str:
     return unicodedata.normalize("NFD", text).encode("ascii", "ignore").decode().lower()
 
 
+def flatten(text: str) -> str:
+    """Colapsa ``\\n`` literal E quebras de linha reais em espaço simples.
+
+    O campo ``trecho`` chega de duas origens: o CSV do detector, que preserva a
+    quebra de linha real do documento, e o gabarito, que escapa a quebra como os
+    dois caracteres ``\\`` + ``n``. Tratar só a forma escapada fazia toda citação
+    que cruzasse linha perder a normalização e cair no fallback ``incompleta``.
+    """
+    return re.sub(r"\s+", " ", str(text).replace("\\n", " "))
+
+
 def normalize_space(text: str) -> str:
-    text = ascii_lower(str(text).replace("\\n", " "))
+    text = ascii_lower(flatten(text))
     text = re.sub(r"[^a-z0-9]+", " ", text)
     return re.sub(r"\s+", " ", text).strip()
 
@@ -87,12 +124,12 @@ def class_codes(text: str) -> list[str]:
 
 
 def get_uf(text: str) -> str | None:
-    match = UF_RE.search(str(text).replace("\\n", " "))
+    match = UF_RE.search(flatten(text))
     return match.group(0).strip(" /-(").upper() if match else None
 
 
 def raw_numeric_tokens(text: str) -> str | None:
-    text = str(text).replace("\\n", " ")
+    text = flatten(text)
     text = UF_RE.sub(" ", text)
     tokens = re.findall(r"[0-9OolISGg]+", text)
     tokens = [token for token in tokens if any(ch.isdigit() for ch in token)]
@@ -100,6 +137,12 @@ def raw_numeric_tokens(text: str) -> str | None:
 
 
 def expand_ocr(raw: str) -> set[str]:
+    """Expande as confusões de OCR de um token numérico.
+
+    Só ``g`` abre duas alternativas (6 ou 9), então o custo é 2^n no número de
+    ``g``. O teto mantém o resultado determinístico e evita explosão
+    combinatória em token longo (truncagem ordenada: sempre o mesmo conjunto).
+    """
     values = {""}
     mapping = {
         "O": "0", "o": "0",
@@ -118,12 +161,14 @@ def expand_ocr(raw: str) -> set[str]:
             options = [options]
 
         values = {prefix + option for prefix in values for option in options}
+        if len(values) > _LIMITE_VARIANTES_OCR:
+            values = set(sorted(values)[:_LIMITE_VARIANTES_OCR])
 
     return values
 
 
 def article_number(text: str) -> str | None:
-    text = ascii_lower(str(text).replace("\\n", " "))
+    text = ascii_lower(flatten(text))
     match = re.search(
         r"\barts?\.?\s*(\d+(?:\.\d+)*)|\bartigos?\s*(\d+(?:\.\d+)*)",
         text,
@@ -133,8 +178,28 @@ def article_number(text: str) -> str | None:
     return re.sub(r"\D", "", match.group(1) or match.group(2))
 
 
+def _norma_por_similaridade(text: str) -> str | None:
+    """Casa nome de norma com erro de digitação/OCR por similaridade.
+
+    Só nomes longos entram: comparar sigla curta com janela de texto geraria
+    vínculo errado, que a métrica pune mais do que a ausência de vínculo.
+    """
+    palavras = text.split()
+    for nome in sorted(LAW_SOURCE_MAP, key=len, reverse=True):
+        if len(nome) < _FUZZY_MIN_CARACTERES or nome in text:
+            continue
+        quantidade = len(nome.split())
+        for inicio in range(len(palavras) - quantidade + 1):
+            janela = " ".join(palavras[inicio:inicio + quantidade])
+            if abs(len(janela) - len(nome)) > 4:
+                continue
+            if SequenceMatcher(None, janela, nome).ratio() >= _FUZZY_LIMITE:
+                return nome
+    return None
+
+
 def law_source(text: str) -> tuple[str, str | None] | None:
-    text = ascii_lower(str(text).replace("\\n", " ")).replace("fedcral", "federal")
+    text = ascii_lower(flatten(text))
 
     match = re.search(
         r"lei\s+complementar\s*(?:n(?:umero)?[.\s]*)?(\d+(?:\.\d+)*)",
@@ -154,11 +219,15 @@ def law_source(text: str) -> tuple[str, str | None] | None:
         if name in text:
             return LAW_SOURCE_MAP[name]
 
+    aproximado = _norma_por_similaridade(text)
+    if aproximado is not None:
+        return LAW_SOURCE_MAP[aproximado]
+
     return None
 
 
 def summary_parse(text: str):
-    text = ascii_lower(str(text).replace("\\n", " "))
+    text = ascii_lower(flatten(text))
     match = re.search(
         r"\b(?:sumula|5umula|sum\.)\s*(?:vinculante\s*)?"
         r"(?:n(?:[.º°o]|umero)?\s*)?(\d+)",
@@ -445,17 +514,23 @@ def classify_csv(input_path: str | Path, output_path: str | Path, db_path: str |
             "tipo": tipo,
             "classificacao": classificacao,
             "resolucao": (
-                {"id_canonico": int(canonical_id)}
+                {"fonte": "jusbrasil", "id_canonico": str(canonical_id)}
                 if canonical_id is not None else None
             ),
         }
         grouped[documento_id].append(citacao)
 
     for documento_id in sorted(grouped):
+        # Contrato de Entrada e Saída v1.2 (chaves e tipos conforme o exemplo
+        # oficial). ``confianca`` é opcional e fica ausente: o bônus de
+        # calibração (Brier) não é reivindicado.
         payload = {
-            "schema": "1.2",
+            "schema_version": "1.2",
             "documento_id": documento_id,
-            "citacoes": grouped[documento_id],
+            "citacoes": [
+                {"id": f"c{i}", **citacao}
+                for i, citacao in enumerate(grouped[documento_id], start=1)
+            ],
         }
         destination = output_dir / f"{documento_id}.json"
         destination.write_text(
@@ -472,10 +547,22 @@ def main():
     parser = argparse.ArgumentParser(
         description="Classifica citacoes juridicas como real, inventada ou incompleta."
     )
-    parser.add_argument("--db", required=True, help="Caminho para desafio1_bracis.db")
+    padrao = caminho_db_padrao()
+    parser.add_argument(
+        "--db",
+        default=str(padrao) if padrao else None,
+        help="Caminho para desafio1_bracis.db (padrao: pacote de dados do repo)",
+    )
     parser.add_argument("--entrada", required=True, help="CSV produzido pelo detector")
     parser.add_argument("--saida", required=True, help="Pasta onde serão gerados os JSONs")
     args = parser.parse_args()
+
+    if not args.db:
+        raise SystemExit(
+            "informe --db: nenhum desafio1_bracis.db encontrado em "
+            + " ou ".join(str(Path(__file__).resolve().parent / nome)
+                          for nome in _DIRETORIOS_DADOS)
+        )
 
     classify_csv(args.entrada, args.saida, args.db)
     print(f"CSV classificado salvo em: {args.saida}")

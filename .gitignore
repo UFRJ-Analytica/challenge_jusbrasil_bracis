@@ -11,6 +11,9 @@ env/
 resultados/
 *.tmp
 
+# Testes — mantidos fora do versionamento
+test_*.py
+
 # Pacote de dados da competição (baixado do Kaggle; o .db sozinho tem ~90 MB).
 # Não é versionado: quem clonar baixa de novo pelo Kaggle. O
 # json_to_submission.py é código nosso e vive nessa pasta — daí a exceção.

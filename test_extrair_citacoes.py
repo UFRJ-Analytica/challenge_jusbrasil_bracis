@@ -62,6 +62,8 @@ class IdentificarCitacoesTest(unittest.TestCase):
         candidatos = (
             diretorio_projeto / "dados_competicao",
             diretorio_projeto.parent / "dados_competicao",
+            diretorio_projeto / "desafio-jusbrasil-bracis-2026",
+            diretorio_projeto.parent / "desafio-jusbrasil-bracis-2026",
         )
         raiz = next(
             (candidato for candidato in candidatos if candidato.is_dir()), None

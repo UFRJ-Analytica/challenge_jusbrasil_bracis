@@ -1,0 +1,5 @@
+# Dependências apenas do caminho de AVALIAÇÃO e da métrica oficial
+# (kaggle_metric.py é distribuído pelos organizadores). O detector e o
+# resolvedor usam somente a biblioteca padrão.
+pandas>=2.0
+numpy>=1.24

@@ -1,0 +1,19 @@
+# Controle de versão e artefatos locais
+.git
+.gitignore
+LICENSE
+
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Saídas geradas pelo pipeline
+resultados/
+
+# Dados da competição: ficam de fora da imagem (são montados em tempo de
+# execução). A exceção é o json_to_submission.py, que é código nosso e vive
+# dentro dessa pasta.
+desafio-jusbrasil-bracis-2026/*
+!desafio-jusbrasil-bracis-2026/json_to_submission.py
